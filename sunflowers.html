@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Particle Sunflower Bouquet</title>
+<style>
+:root{color-scheme:dark;--bg:#000;--fg:#e9e4d2;--mut:#a39d86;--panel:rgba(20,18,10,.55);box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--fg)}
+canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
+canvas:active{cursor:grabbing}
+#ui{position:fixed;left:12px;bottom:calc(12px + env(safe-area-inset-bottom,0px));padding:10px 14px;background:var(--panel);border:1px solid rgba(255,220,120,.18);border-radius:12px;backdrop-filter:blur(8px);font-size:12px;display:grid;gap:6px;min-width:190px}
+#ui label{display:flex;justify-content:space-between;gap:10px;color:var(--mut)}
+#ui input{width:110px;accent-color:#e8b923}
+#hint{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));left:0;right:0;text-align:center;font-size:12px;color:var(--mut);pointer-events:none;letter-spacing:.04em}
+#hint,#ui{display:none!important}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">drag to rotate · move to disturb the particles · scroll to zoom</div>
+<div id="ui">
+  <label>Speed <input id="spd" type="range" min="0" max="3" step="0.05" value="1"></label>
+  <label>Density <input id="den" type="range" min="0.1" max="1" step="0.01" value="1"></label>
+</div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+// ---------- helpers ----------
+const R = Math.random, TAU = Math.PI * 2;
+const add3 = (a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const sub3 = (a,b)=>[a[0]-b[0],a[1]-b[1],a[2]-b[2]];
+const sc3  = (a,k)=>[a[0]*k,a[1]*k,a[2]*k];
+const crs  = (a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const nrm  = a=>{const l=Math.hypot(a[0],a[1],a[2])||1;return [a[0]/l,a[1]/l,a[2]/l]};
+const mix  = (a,b,t)=>a.map((x,i)=>x+(b[i]-x)*t);
+const bez  = (A,B,C,t)=>A.map((x,i)=>(1-t)*(1-t)*x+2*(1-t)*t*B[i]+t*t*C[i]);
+const rv   = ()=>nrm([R()-.5,R()-.5,R()-.5]);
+
+// ---------- particle / filament buffers ----------
+const mk = ()=>({p:[],c:[],s:[],f:[]});
+const PT = mk(), LN = mk();
+function push(B,p,c,size,amp,fid,fr,r){
+  B.p.push(p[0],p[1],p[2]); B.c.push(c[0],c[1],c[2]);
+  B.s.push(r===undefined?R():r, R()*TAU, amp, size); B.f.push(fid,fr);
+}
+const pt = (p,c,size,amp,fid,fr)=>push(PT,p,c,size,amp,fid,fr);
+function ln(a,b,c,amp,fid,fr){ const r=R(); push(LN,a,c,1,amp,fid,fr,r); push(LN,b,c,1,amp*2.4,fid,fr,r); }
+
+// ---------- stems ----------
+function stem(A,B,C,fid,th,n,f0,f1,col){
+  for(let k=0;k<n;k++){
+    const t=k/n, p=bez(A,B,C,t), q=bez(A,B,C,Math.min(1,t+.03));
+    const o=sc3(rv(),th*(1-.35*t)), g=mix(col,[col[0]*1.6,col[1]*1.5,col[2]*1.4],R());
+    const fr=f0+(f1-f0)*t;
+    pt(add3(p,o),g,1.5,.004,fid,fr);
+    if(k%3===0) ln(add3(p,o),add3(add3(p,o),sc3(sub3(q,p),6+R()*5)),g,.006,fid,fr);
+  }
+}
+
+// ---------- leaf made of flowing strands ----------
+function leaf(base,d,Ln,W,fid,fr){
+  d=nrm(d); const side=nrm(crs(d,[0,1,0])), up=crs(side,d);
+  const at=(t,s)=>{
+    const w=W*Math.sin(Math.PI*Math.pow(t,.6))*(1-.3*t);
+    return add3(add3(add3(base,sc3(d,t*Ln)),sc3(side,s*w)),add3(sc3([0,-1,0],.3*Ln*t*t),sc3(up,.18*w*s*s+.05*Math.sin(t*9+s*3))));
+  };
+  for(let i=0;i<380;i++){
+    const t=R(),s=R()*2-1, rib=1-Math.abs(s);
+    const c=mix([.04,.3,.07],[.22,.62,.15],R()*.6+rib*.4);
+    pt(at(t,s),c,1.6,.012+.02*t,fid,fr);
+  }
+  for(let i=0;i<110;i++){
+    const t=R()*.75,sg=R()<.5?-1:1;
+    ln(at(t,0),at(Math.min(1,t+.25),sg*(.8+R()*.2)),[.1+R()*.15,.5+R()*.2,.12],.015,fid,fr);
+  }
+}
+
+// ---------- sunflower ----------
+function sunflower(h,fid){
+  const [x,y,z,Rr]=h, c=[x,y,z];
+  const n=nrm(add3(nrm([x,y+1.5,z]),[0,0,1.5]));
+  const u=nrm(crs(n,[0,1,0])), v=crs(n,u);
+  const at=(a,b,k)=>[c[0]+u[0]*a+v[0]*b+n[0]*k,c[1]+u[1]*a+v[1]*b+n[1]*k,c[2]+u[2]*a+v[2]*b+n[2]*k];
+  const rc=.36*Rr;
+  // seed disk (phyllotaxis)
+  const N=2600;
+  for(let i=0;i<N;i++){
+    const r=rc*Math.sqrt(i/N), a=i*2.39996, t=r/rc;
+    const dome=.12*Rr*(1-t*t);
+    let col=mix([.1,.04,.01],[.55,.28,.05],Math.pow(t,1.5));
+    if(i%6===0) col=mix(col,[.95,.6,.1],.55*t+.1);
+    if(t>.88) col=mix(col,[1,.62,.08],.6);
+    pt(at(Math.cos(a)*r,Math.sin(a)*r,dome),col,2.6,.008,fid,1);
+    if(i%4===0){const p=at(Math.cos(a)*r,Math.sin(a)*r,dome);
+      ln(p,add3(p,sc3(n,.06*Rr+R()*.08*Rr)),mix(col,[1,.75,.2],.4),.01,fid,1);}
+  }
+  // two petal layers
+  const NP=28;
+  for(let Ly=0;Ly<3;Ly++){
+    for(let j=0;j<NP;j++){
+      const a=(j+Ly*.33)/NP*TAU+(R()-.5)*.12, ca=Math.cos(a), sa=Math.sin(a);
+      const Lp=Rr*(.72+.1*R())*(1-Ly*.08), Wd=.2*Rr*(1-Ly*.06), curl=(R()-.5)*.5;
+      for(let m=0;m<90;m++){
+        const t=Math.pow(R(),.8), s=R()*2-1;
+        const w=Wd*Math.sin(Math.PI*Math.pow(t,.75)), rad=rc*.9+t*Lp, sd=s*w+curl*t*t*Rr*.3;
+        const X=ca*rad-sa*sd, Y=sa*rad+ca*sd;
+        const Z=-.1*Rr*t*t+.04*Rr*s*s*(1-t)-Ly*.05*Rr+.02*Rr*Math.sin(t*6+j);
+        let col=mix([.95,.45,.02],[1,.8,.08],Math.pow(t,.7));
+        col=sc3(col,(.75+.45*Math.abs(s))*(1-Ly*.12));
+        const p=at(X,Y,Z);
+        pt(p,col,1.5+R()*1.1,.01+.03*t,fid,1);
+        if(R()<.5){
+          const len=(.06+.14*R())*Rr;
+          ln(p,at(X+ca*len+(R()-.5)*.04*Rr,Y+sa*len+(R()-.5)*.04*Rr,Z-.03*Rr),sc3(col,1.1),.012+.02*t,fid,1);
+        }
+      }
+    }
+  }
+  // green bracts behind the head
+  for(let i=0;i<260;i++){const a=R()*TAU,r=rc*(.9+.5*R());pt(at(Math.cos(a)*r,Math.sin(a)*r,-.1*Rr-.05*Rr*R()),[.1,.4,.08],2,.01,fid,1);}
+  // stem + leaves
+  const A=[(R()-.5)*.5,-3.6,(R()-.5)*.5], C=at(0,0,-.09*Rr), B=[C[0]*.3,A[1]+(C[1]-A[1])*.55,C[2]*.3];
+  stem(A,B,C,fid,.05,420,0,.98,[.06,.34,.07]);
+  for(let k=0;k<2;k++){
+    const t=.22+k*.2+R()*.08, base=bez(A,B,C,t), ang=R()*TAU;
+    leaf(base,[Math.cos(ang),.45+R()*.3,Math.sin(ang)],1.1+R()*.5,.5+R()*.15,fid,t);
+  }
+}
+
+// ---------- baby's breath ----------
+function floret(c,fid,fr){
+  for(let i=0;i<42;i++){
+    const o=sc3(rv(),.045*Math.pow(R(),.6)), p=add3(c,o);
+    pt(p,mix([1,.97,.86],[1,1,.95],R()),2.3,.02,fid,fr);
+  }
+  for(let i=0;i<5;i++){
+    const d=sc3(rv(),.08); ln(c,add3(c,d),[.95,.93,.82],.02,fid,fr);
+  }
+  pt(c,[.9,.85,.45],5,.012,fid,fr);
+}
+function spray(fid){
+  const E=[(R()-.5)*4.6,-.6+R()*3.8,(R()-.5)*3.6];
+  const A=[(R()-.5)*.6,-3.6,(R()-.5)*.6], B=[E[0]*.3,A[1]+(E[1]-A[1])*.5,E[2]*.3];
+  stem(A,B,E,fid,.012,110,0,1,[.1,.38,.1]);
+  for(let b=0;b<7;b++){
+    const t=.5+.5*R(), o=bez(A,B,E,t);
+    const e=add3(add3(o,sc3(rv(),.7)),[0,.25,0]);
+    const mid=add3(mix(o,e,.5),sc3(rv(),.12));
+    stem(o,mid,e,fid,.006,22,t,1,[.15,.45,.13]);
+    for(let s=0;s<3;s++){
+      const f=add3(e,sc3(rv(),.32)), m2=add3(mix(e,f,.5),sc3(rv(),.06));
+      stem(e,m2,f,fid,.004,10,1,1,[.2,.5,.15]);
+      floret(f,fid,1);
+    }
+  }
+}
+
+// ---------- build the bouquet ----------
+const heads=[[0,2.3,.1,1.0],[-1.55,1.4,.5,.85],[1.55,1.25,-.3,.9],[-.6,.35,1.25,.75],[.95,.1,1.1,.7],[-1.75,-.1,-.9,.68],[.15,.95,-1.4,.8]];
+heads.forEach((h,i)=>sunflower([h[0],h[1],h[2],h[3]*1.22],i+1));
+for(let i=0;i<16;i++) spray(20+i);
+
+// ---------- three.js ----------
+const canvas=document.getElementById('c');
+const renderer=new THREE.WebGLRenderer({canvas,antialias:true,alpha:false});
+renderer.setClearColor(0x000000,1);
+const scene=new THREE.Scene();
+const camera=new THREE.PerspectiveCamera(40,1,.1,100);
+const group=new THREE.Group(); scene.add(group);
+
+const U={uT:{value:0},uDens:{value:1},uPix:{value:1},uMOn:{value:0},uCam:{value:10},uM:{value:new THREE.Vector2(99,99)}};
+const VS=`
+uniform float uT,uDens,uPix,uMOn,uCam; uniform vec2 uM;
+attribute vec3 aColor; attribute vec4 aSeed; attribute vec2 aFl;
+varying vec3 vC;
+vec3 flow(vec3 p,float t){
+  return vec3(sin(p.y*1.7+t+sin(p.z*1.3-t*.6)),
+              sin(p.z*1.9-t*.8+sin(p.x*1.1+t*.7)),
+              sin(p.x*1.5+t*.9+sin(p.y*1.2-t*.5)));
+}
+void main(){
+  float t=uT, id=aFl.x, fr=aFl.y; vec3 p=position;
+  vec3 sw=vec3(sin(t*.7+id*1.9)+.5*sin(t*1.3+id*3.1), .25*sin(t*.9+id*2.3), cos(t*.6+id*1.3)+.5*sin(t*1.1+id*.7))*.2;
+  p+=sw*fr*fr;
+  p+=vec3(sin(p.y*1.4-t*1.4)*.04, 0., sin(p.x*1.6+p.y*1.2-t*1.4)*.05)*fr;
+  p+=flow(p*1.3+aSeed.y,t*.8)*aSeed.z;
+  p+=sin(vec3(t*9.+aSeed.y*3.,t*8.+aSeed.y*5.,t*10.+aSeed.y))*.004;
+  vec4 mv=modelViewMatrix*vec4(p,1.);
+  vec2 d=mv.xy-uM; float f=exp(-dot(d,d)*.7)*uMOn;
+  mv.xy+=normalize(d+1e-4)*f*.55;
+  gl_Position=projectionMatrix*mv;
+  float tw=.75+.35*sin(t*2.+aSeed.y*4.);
+  float dep=clamp(1.3+(mv.z+uCam)*.12,.5,1.4);
+  vC=aColor*tw*dep;
+  gl_PointSize=aSeed.w*uPix*(uCam/-mv.z)*1.5*(.8+f);
+  if(aSeed.x>uDens) gl_Position=vec4(2.,2.,2.,1.);
+}`;
+const FS=`
+varying vec3 vC;
+void main(){
+#ifdef LINE
+  gl_FragColor=vec4(vC,.32);
+#else
+  float d=length(gl_PointCoord-.5)*2.;
+  float a=exp(-d*d*4.)*(1.-smoothstep(.8,1.,d));
+  gl_FragColor=vec4(vC,a*.9);
+#endif
+}`;
+function geo(B){
+  const g=new THREE.BufferGeometry();
+  g.setAttribute('position',new THREE.Float32BufferAttribute(B.p,3));
+  g.setAttribute('aColor',new THREE.Float32BufferAttribute(B.c,3));
+  g.setAttribute('aSeed',new THREE.Float32BufferAttribute(B.s,4));
+  g.setAttribute('aFl',new THREE.Float32BufferAttribute(B.f,2));
+  g.boundingSphere=new THREE.Sphere(new THREE.Vector3(),20);
+  return g;
+}
+const mat=line=>new THREE.ShaderMaterial({uniforms:U,vertexShader:VS,fragmentShader:FS,defines:line?{LINE:1}:{},
+  transparent:true,blending:THREE.AdditiveBlending,depthWrite:false,depthTest:false});
+group.add(new THREE.LineSegments(geo(LN),mat(true)));
+group.add(new THREE.Points(geo(PT),mat(false)));
+group.position.y=.15;
+
+// ---------- interaction ----------
+let rotY=0,rotX=.08,drag=false,lx=0,ly=0,zoom=1,camD=10,mx=0,my=0;
+function resize(){
+  const w=innerWidth,h=innerHeight,dpr=Math.min(devicePixelRatio||1,2);
+  renderer.setPixelRatio(dpr); renderer.setSize(w,h,false);
+  camera.aspect=w/h; camera.updateProjectionMatrix();
+  U.uPix.value=Math.max(.6,dpr*h/900*(w<h?1.1:1));
+}
+function place(){
+  camD=Math.max(10,7.5/camera.aspect)*zoom;
+  camera.position.set(0,0,camD); U.uCam.value=camD;
+}
+addEventListener('resize',()=>{resize();place()}); resize(); place();
+canvas.addEventListener('pointerdown',e=>{drag=true;lx=e.clientX;ly=e.clientY;canvas.setPointerCapture(e.pointerId)});
+canvas.addEventListener('pointerup',()=>drag=false);
+canvas.addEventListener('pointerleave',()=>{U.uMOn.target=0});
+canvas.addEventListener('pointermove',e=>{
+  mx=e.clientX/innerWidth*2-1; my=-(e.clientY/innerHeight*2-1); U.uMOn.target=1;
+  if(drag){rotY+=(e.clientX-lx)*.008;rotX=Math.max(-.6,Math.min(.6,rotX+(e.clientY-ly)*.005));lx=e.clientX;ly=e.clientY}
+});
+canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.55,Math.min(1.6,zoom*(1+e.deltaY*.001)));place()},{passive:false});
+U.uMOn.target=0;
+const spd=document.getElementById('spd'),den=document.getElementById('den');
+den.oninput=()=>U.uDens.value=+den.value;
+
+// ---------- loop ----------
+let last=performance.now();
+function frame(now){
+  const dt=Math.min(.05,(now-last)/1000); last=now;
+  U.uT.value+=dt*(+spd.value);
+  if(!drag) rotY+=dt*.1*(+spd.value);
+  group.rotation.y=rotY; group.rotation.x=rotX;
+  const tanH=Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+  U.uM.value.set(mx*tanH*camera.aspect*camD,my*tanH*camD);
+  U.uMOn.value+=(U.uMOn.target-U.uMOn.value)*.08;
+  renderer.render(scene,camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
